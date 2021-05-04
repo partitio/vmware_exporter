@@ -148,3 +148,14 @@ def batch_fetch_properties(content, obj_type, properties):
         results[obj.obj._moId] = properties
 
     return results
+
+
+def get_vm_folder(vm, folders):
+    path = []
+    folder = folders[vm['parent']._moId]
+    while folder is not None and folder['name'] != "vm":
+        path.append(folder['name'])
+        folder = folders[folder['parent']._moId]
+
+    path.reverse()
+    return "/".join(path)

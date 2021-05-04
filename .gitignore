@@ -94,3 +94,5 @@ config*.yml
 
 # Visual Studio Code
 .vscode
+
+.idea

@@ -46,7 +46,7 @@ from pyVim import connect
 from prometheus_client.core import GaugeMetricFamily
 from prometheus_client import CollectorRegistry, generate_latest
 
-from .helpers import batch_fetch_properties, get_bool_env
+from .helpers import batch_fetch_properties, get_bool_env, get_vm_folder
 from .defer import parallelize, run_once_property
 
 
@@ -92,10 +92,10 @@ class VmwareCollector():
 
         # label names and ammount will be needed later to insert labels from custom attributes
         self._labelNames = {
-            'vms': ['vm_name', 'host_name', 'dc_name', 'cluster_name'],
-            'vm_perf': ['vm_name', 'host_name', 'dc_name', 'cluster_name'],
-            'vmguests': ['vm_name', 'host_name', 'dc_name', 'cluster_name'],
-            'snapshots': ['vm_name', 'host_name', 'dc_name', 'cluster_name'],
+            'vms': ['vm_name', 'host_name', 'dc_name', 'cluster_name', 'vm_folder', 'vm_path', 'tenant'],
+            'vm_perf': ['vm_name', 'host_name', 'dc_name', 'cluster_name', 'vm_folder', 'vm_path', 'tenant'],
+            'vmguests': ['vm_name', 'host_name', 'dc_name', 'cluster_name', 'vm_folder', 'vm_path', 'tenant'],
+            'snapshots': ['vm_name', 'host_name', 'dc_name', 'cluster_name', 'vm_folder', 'vm_path', 'tenant'],
             'datastores': ['ds_name', 'dc_name', 'ds_cluster'],
             'hosts': ['host_name', 'dc_name', 'cluster_name'],
             'host_perf': ['host_name', 'dc_name', 'cluster_name'],
@@ -728,6 +728,23 @@ class VmwareCollector():
 
     @run_once_property
     @defer.inlineCallbacks
+    def folders(self):
+        logging.info("Fetching vim.Folder inventory")
+        start = datetime.datetime.utcnow()
+        properties = [
+            'name',
+            'parent',
+        ]
+        folders = yield self.batch_fetch_properties(
+            vim.Folder,
+            properties,
+        )
+        fetch_time = datetime.datetime.utcnow() - start
+        logging.info("Fetched vim.Folder inventory ({fetch_time})".format(fetch_time=fetch_time))
+        return folders
+
+    @run_once_property
+    @defer.inlineCallbacks
     def vm_inventory(self):
         logging.info("Fetching vim.VirtualMachine inventory")
         start = datetime.datetime.utcnow()
@@ -1077,9 +1094,9 @@ class VmwareCollector():
     @run_once_property
     @defer.inlineCallbacks
     def vm_labels(self):
+        virtual_machines, host_labels, folders = yield parallelize(self.vm_inventory, self.host_labels, self.folders)
 
-        virtual_machines, host_labels = yield parallelize(self.vm_inventory, self.host_labels)
-
+        logging.info("START: collect vm labels")
         labels = {}
         for moid, row in virtual_machines.items():
 
@@ -1091,6 +1108,12 @@ class VmwareCollector():
 
             if host_moid in host_labels:
                 labels[moid] = labels[moid] + host_labels[host_moid]
+
+            dir_path = get_vm_folder(row, folders)
+            vm_path = '{}/{}'.format(dir_path, row['name'])
+            vm_folder = dir_path.split("/")[0]
+            tenant = vm_folder.lower()
+            labels[moid] = labels[moid] + [vm_folder, vm_path, tenant]
 
             """
             this code was in vm_inventory before
@@ -1113,6 +1136,7 @@ class VmwareCollector():
             for i in range(labels_cnt, len(self._labelNames['vms'])):
                 labels[moid].append('n/a')
 
+        logging.info("END: collect vm labels")
         return labels
 
     @run_once_property
